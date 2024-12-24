@@ -349,20 +349,25 @@ export function template<const Name extends string>(name: Name) {
   return <const Values extends ReadonlyArray<Template.AnyParamType>>(
     template: TemplateStringsArray,
     ...values: Values
-  ): Template<Name, Values> => liftImpl(new TemplateImpl(name, template, values), compile)
+  ): Template<Name, Values> =>
+    liftImpl(new TemplateImpl(name, template, values), (impl) => compile(impl, false))
 }
 
 export function dedent<const Name extends string>(name: Name) {
   return <const Values extends ReadonlyArray<Template.AnyParamType>>(
     template: TemplateStringsArray,
     ...values: Values
-  ): Template<Name, Values> => liftImpl(new TemplateImpl(name, template, values), compileDedent)
+  ): Template<Name, Values> =>
+    liftImpl(new TemplateImpl(name, template, values), (impl) => compile(impl, true))
 }
 
 function liftImpl<
   const Name extends string,
   const Values extends ReadonlyArray<Template.AnyParamType>,
->(impl: TemplateImpl<Name, Values>, f: typeof compile): Template<Name, Values> {
+>(
+  impl: TemplateImpl<Name, Values>,
+  f: (impl: TemplateImpl<Name, Values>) => CompiledTemplate<Name, Values>,
+): Template<Name, Values> {
   // Lazily compiled template
   let compiled: CompiledTemplate<Name, Values> | null = null
   function lifted(params: Template.Parameters<Values>) {
@@ -396,32 +401,14 @@ class TemplateImpl<
 function compile<
   const Name extends string,
   const Values extends ReadonlyArray<Template.AnyParamType>,
->(template: TemplateImpl<Name, Values>): CompiledTemplate<Name, Values> {
-  const compiled = compileParametersSchema(template, false)
+>(template: TemplateImpl<Name, Values>, indent: boolean): CompiledTemplate<Name, Values> {
+  const compiled = compileParametersSchema(template, indent)
   return (params = {} as Template.Parameters<Values>) =>
     pipe(
       params,
       encode_(compiled),
       Effect.catchTag('ParseError', TemplateFailure.fromParseError),
       Effect.map((output) => ({ name: template.name, params, output })),
-    )
-}
-
-function compileDedent<
-  const Name extends string,
-  const Values extends ReadonlyArray<Template.AnyParamType>,
->(template: TemplateImpl<Name, Values>): CompiledTemplate<Name, Values> {
-  const compiled = compileParametersSchema(template, true)
-  return <const Params extends Template.Parameters<Values>>(params: Params) =>
-    pipe(
-      params,
-      encode_(compiled),
-      Effect.catchTag('ParseError', TemplateFailure.fromParseError),
-      Effect.map((output) => ({
-        name: template.name,
-        params,
-        output,
-      })),
     )
 }
 
