@@ -37,7 +37,7 @@ export declare namespace Template {
   export type AnyParamType =
     | Primitive
     | Parameter<any, any>
-    | Effect.Effect<string, any, any>
+    | Effect.Effect<Primitive, any, any>
     | Template<any, readonly any[]>
     | Unsafe
 
