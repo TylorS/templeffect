@@ -9,7 +9,9 @@ A powerful, type-safe templating library for TypeScript powered by [Effect](http
 - 🔄 Template composition and nesting
 - 📐 Automatic indentation handling
 - ⚡ Effect-based async template resolution
+- 🌊 Streaming template rendering support
 - 🎨 Rich parameter type support (strings, numbers, dates, UUIDs, etc.)
+- 🔧 Custom Schema support for anything that can be encoded as a string
 
 ## Installation
 
@@ -153,6 +155,62 @@ page({
   header: { title: 'Welcome' },
   content: 'Hello world!'
 })
+```
+
+#### Streaming Templates
+
+Templates can be streamed for efficient processing of large templates or real-time output:
+
+```typescript
+import { Stream } from 'effect'
+
+const largeTemplate = T.template('large')`
+  <div>
+    <h1>${T.param('title')}</h1>
+    ${T.param('content')}
+  </div>`
+
+// Access the streaming version of the template
+const stream = largeTemplate.stream({ 
+  title: 'Large Content',
+  content: '...' 
+})
+
+// Process the stream in chunks
+Stream.runForEach(
+  stream,
+  (chunk) => console.log(chunk), // Each chunk is a string
+)
+```
+
+The streaming implementation:
+- Processes template parts incrementally
+- Maintains proper indentation across chunks
+- Handles both static and dynamic content
+- Preserves template composition
+- Supports dedentation with `T.dedent`
+
+Example with dedentation and streaming:
+
+```typescript
+const indentedTemplate = T.dedent('page')`
+  <html>
+    <body>
+      <h1>${T.param('title')}</h1>
+      <div>
+        ${T.param('content')}
+      </div>
+    </body>
+  </html>`
+
+// Stream with proper indentation
+const stream = indentedTemplate.stream({
+  title: 'Streaming Demo',
+  content: 'Multi\nLine\nContent'
+})
+
+// Each chunk will maintain proper indentation
+Stream.runForEach(stream, console.log)
 ```
 
 #### Effect Integration

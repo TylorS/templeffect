@@ -200,6 +200,15 @@ export function getMinIndent(template: ArrayLike<string>): number {
   return min === Number.POSITIVE_INFINITY ? 0 : min
 }
 
+/**
+ * Creates a set of buffers for concurrent streaming of template parts.
+ * Each buffer manages a sequence of template parts that need to be emitted in order.
+ * 
+ * @param size - The number of buffers to create (one per template value)
+ * @param emit - The stream emitter to send chunks through
+ * @param id - The fiber ID for deferred operations
+ * @returns An object with methods to handle success and end states for each buffer
+ */
 export function withBuffers<A, E, R>(
   size: number,
   emit: StreamEmit.Emit<R, E, A, unknown>,
@@ -217,6 +226,15 @@ export function withBuffers<A, E, R>(
   } as const
 }
 
+/**
+ * Creates a set of indexed buffers for ordered streaming of template parts.
+ * Each buffer ensures that its parts are emitted in the correct order relative to other buffers.
+ * 
+ * @param size - The number of buffers to create
+ * @param emit - The stream emitter to send chunks through
+ * @param id - The fiber ID for deferred operations
+ * @returns A map of buffer instances
+ */
 function indexedBuffers<A, E, R>(
   size: number,
   emit: StreamEmit.Emit<R, E, A, unknown>,
@@ -257,6 +275,15 @@ function indexedBuffers<A, E, R>(
   return buffers
 }
 
+/**
+ * Creates a buffer for a specific index in the template.
+ * The buffer manages the state and emission of template parts for its position.
+ * 
+ * @param state - The buffer's state including readiness and deferred completion
+ * @param emit - The stream emitter to send chunks through
+ * @param onDone - Effect to run when the buffer is done
+ * @returns A buffer instance with methods to handle success and end states
+ */
 function IndexedBuffer<A, E, R>(
   state: {
     ready: boolean
@@ -295,7 +322,15 @@ function IndexedBuffer<A, E, R>(
 }
 
 /**
- * Process a single template part with proper indentation for streaming
+ * Process a single template part with proper indentation for streaming.
+ * Handles special cases for first lines and maintains indentation context.
+ * 
+ * @param templatePart - The template part to process
+ * @param minIndent - The minimum indentation level to remove
+ * @param shouldDedent - Whether to perform dedentation
+ * @param isFirstLine - Whether this is the first line of the template
+ * @param previousContent - The previous content for indentation context
+ * @returns The processed template part with proper indentation
  */
 export function processTemplatePart(
   templatePart: string,
@@ -343,7 +378,14 @@ export function processTemplatePart(
 }
 
 /**
- * Process a value part with proper indentation for streaming
+ * Process a value part with proper indentation for streaming.
+ * Handles multiline values and maintains indentation context.
+ * 
+ * @param value - The value to process (string or Unsafe)
+ * @param minIndent - The minimum indentation level to remove
+ * @param shouldDedent - Whether to perform dedentation
+ * @param previousContent - The previous content for indentation context
+ * @returns The processed value with proper indentation
  */
 export function processValuePart(
   value: string | Unsafe,
