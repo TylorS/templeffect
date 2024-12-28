@@ -471,32 +471,20 @@ function compileStream<
       string,
       Template.ErrorFromValue<Values[number]> | TemplateFailure,
       Template.ContextFromValue<Values[number]>
-    >(
-      (
-        emit,
-      ): Effect.Effect<
-        void,
-        Template.ErrorFromValue<Values[number]> | TemplateFailure,
-        Template.ContextFromValue<Values[number]>
-      > =>
-        Effect.gen(function* () {
-          const fiberId = yield* Effect.fiberId
-          const buffer = utils.withBuffers(values.length, emit, fiberId)
-          
-          // Process first template part with dedentation
-          const firstPart = utils.processTemplatePart(
-            templateStrings[0],
-            minIndent,
-            indent,
-            true,
-            null,
-          )
-          yield* Effect.promise(() => emit.single(firstPart))
-          let lastContent = firstPart
-          
-          yield* Effect.forEach(
-            parts,
-            (part, index) => {
+    >((emit) =>
+      Effect.fiberIdWith((fiberId) => {
+        const buffer = utils.withBuffers(values.length, emit, fiberId)
+        const firstPart = utils.processTemplatePart(
+          templateStrings[0],
+          minIndent,
+          indent,
+          true,
+          null,
+        )
+        return Effect.promise(() => emit.single(firstPart)).pipe(
+          Effect.zipRight(
+            Effect.forEach(parts, (part: 'static' | 'dynamic', index: number) => {
+              const lastContent = templateStrings[index]
               if (part === 'static') {
                 // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
                 const staticValue = staticParts.get(index)!
@@ -513,7 +501,6 @@ function compileStream<
                   false,
                   processedValue,
                 )
-                lastContent = nextTemplate
                 return buffer
                   .onSuccess(index, processedValue)
                   .pipe(
@@ -525,7 +512,9 @@ function compileStream<
               // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
               const [name, encode] = dynamicParts.get(index)!
               return encode(name === null ? {} : params[name as keyof typeof params]).pipe(
-                Effect.map((value) => utils.processValuePart(value, minIndent, indent, lastContent)),
+                Effect.map((value) =>
+                  utils.processValuePart(value, minIndent, indent, lastContent),
+                ),
                 Effect.flatMap((processedValue) => {
                   const nextTemplate = utils.processTemplatePart(
                     templateStrings[index + 1],
@@ -534,7 +523,6 @@ function compileStream<
                     false,
                     processedValue,
                   )
-                  lastContent = nextTemplate
                   return buffer
                     .onSuccess(index, processedValue)
                     .pipe(
@@ -543,10 +531,10 @@ function compileStream<
                     )
                 }),
               )
-            },
-            { concurrency: 'unbounded' },
-          )
-        }),
+            }),
+          ),
+        )
+      }),
     )
 }
 
