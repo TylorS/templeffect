@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@effect/vitest'
-import { Duration, Effect } from 'effect'
+import { Duration, Effect, Stream } from 'effect'
 import * as T from './template.js'
 
 describe('templeffect', () => {
@@ -22,6 +22,30 @@ describe('templeffect', () => {
     }),
   )
 
+  it.effect('supports streaming', () =>
+    Effect.gen(function* () {
+      const makeHtml = T.template('foo')`<html>
+  <body>
+    <h1>Hello, ${T.param('name')}!</h1>
+  </body>
+</html>`
+
+      const parts = Array.from(yield* Stream.runCollect(makeHtml.stream({ name: 'world' })))
+
+      expect(parts).toMatchInlineSnapshot(`
+        [
+          "<html>
+          <body>
+            <h1>Hello, ",
+          "world",
+          "!</h1>
+          </body>
+        </html>",
+        ]
+      `)
+    }),
+  )
+
   it.effect('dedents template', () =>
     Effect.gen(function* () {
       const makeHtml = T.dedent('foo')`<html>
@@ -37,6 +61,29 @@ describe('templeffect', () => {
             <h1>Hello, world!</h1>
           </body>
         </html>"
+      `)
+    }),
+  )
+
+  it.effect('support streaming dedent', () =>
+    Effect.gen(function* () {
+      const makeHtml = T.dedent('foo')`<html>
+                                         <body>
+                                           <h1>Hello, ${T.param('name')}!</h1>
+                                         </body>
+                                       </html>`
+
+      const parts = Array.from(yield* Stream.runCollect(makeHtml.stream({ name: 'world' })))
+      expect(parts).toMatchInlineSnapshot(`
+        [
+          "<html>
+          <body>
+            <h1>Hello, ",
+          "world",
+          "!</h1>
+          </body>
+        </html>",
+        ]
       `)
     }),
   )

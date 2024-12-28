@@ -1,4 +1,14 @@
-import { Duration, Effect, identity, ParseResult, pipe, Pipeable, Schema, type Types } from 'effect'
+import {
+  Duration,
+  Effect,
+  identity,
+  ParseResult,
+  pipe,
+  Pipeable,
+  Schema,
+  Stream,
+  type Types,
+} from 'effect'
 import { ArrayFormatter } from 'effect/ParseResult'
 import { StringToUnsafe, type Unsafe, UnsafeFromString } from './unsafe.js'
 import * as utils from './utils.js'
@@ -18,6 +28,16 @@ export interface Template<
       : [Template.Parameters<Values>]
   ): Effect.Effect<
     TemplateResult<Name, Template.Parameters<Values>>,
+    Template.ErrorFromValue<Values[number]> | TemplateFailure,
+    Template.ContextFromValue<Values[number]>
+  >
+
+  readonly stream: (
+    ...[params]: [keyof Template.Parameters<Values>] extends [never]
+      ? [{}?]
+      : [Template.Parameters<Values>]
+  ) => Stream.Stream<
+    string,
     Template.ErrorFromValue<Values[number]> | TemplateFailure,
     Template.ContextFromValue<Values[number]>
   >
@@ -345,12 +365,24 @@ type CompiledTemplate<Name extends string, Values extends ReadonlyArray<Template
   Template.ContextFromValue<Values[number]>
 >
 
+type StreamedTemplate<Name extends string, Values extends ReadonlyArray<Template.AnyParamType>> = (
+  params: Template.Parameters<Values>,
+) => Stream.Stream<
+  string,
+  Template.ErrorFromValue<Values[number]> | TemplateFailure,
+  Template.ContextFromValue<Values[number]>
+>
+
 export function template<const Name extends string>(name: Name) {
   return <const Values extends ReadonlyArray<Template.AnyParamType>>(
     template: TemplateStringsArray,
     ...values: Values
   ): Template<Name, Values> =>
-    liftImpl(new TemplateImpl(name, template, values), (impl) => compile(impl, false))
+    liftImpl(
+      new TemplateImpl(name, template, values),
+      (impl) => compile(impl, false),
+      (impl) => compileStream(impl, false),
+    )
 }
 
 export function dedent<const Name extends string>(name: Name) {
@@ -358,7 +390,11 @@ export function dedent<const Name extends string>(name: Name) {
     template: TemplateStringsArray,
     ...values: Values
   ): Template<Name, Values> =>
-    liftImpl(new TemplateImpl(name, template, values), (impl) => compile(impl, true))
+    liftImpl(
+      new TemplateImpl(name, template, values),
+      (impl) => compile(impl, true),
+      (impl) => compileStream(impl, true),
+    )
 }
 
 function liftImpl<
@@ -367,6 +403,7 @@ function liftImpl<
 >(
   impl: TemplateImpl<Name, Values>,
   f: (impl: TemplateImpl<Name, Values>) => CompiledTemplate<Name, Values>,
+  g: (impl: TemplateImpl<Name, Values>) => StreamedTemplate<Name, Values>,
 ): Template<Name, Values> {
   // Lazily compiled template
   let compiled: CompiledTemplate<Name, Values> | null = null
@@ -377,11 +414,20 @@ function liftImpl<
     return compiled(params)
   }
 
+  let streamed: StreamedTemplate<Name, Values> | null = null
+  function liftedStream(params: Template.Parameters<Values>) {
+    if (!streamed) {
+      streamed = g(impl)
+    }
+    return streamed(params)
+  }
+
   Object.defineProperties(lifted, {
     _tag: { value: 'Template' },
     name: { value: impl.name },
     template: { value: impl.template },
     values: { value: impl.values },
+    stream: { value: liftedStream },
   })
 
   return lifted as any
@@ -412,22 +458,115 @@ function compile<
     )
 }
 
-const compileParametersSchemaCache = new WeakMap<
-  TemplateImpl<any, any>,
-  Schema.Schema<any, any, any>
->()
-
-function compileParametersSchema<
+function compileStream<
   const Name extends string,
   const Values extends ReadonlyArray<Template.AnyParamType>,
->(
-  t: TemplateImpl<Name, Values>,
-  indent: boolean,
-): Schema.Schema<Template.Parameters<Values>, string, any> {
-  const cached = compileParametersSchemaCache.get(t)
-  if (cached) return cached
+>(template: TemplateImpl<Name, Values>, indent: boolean): StreamedTemplate<Name, Values> {
+  const { values, template: templateStrings } = template
+  const { parts, staticParts, dynamicParts } = compileParameters(template, indent)
+  const minIndent = utils.getMinIndent(templateStrings)
 
-  const { template, values } = t
+  return (params = {} as Template.Parameters<Values>) =>
+    Stream.asyncEffect<
+      string,
+      Template.ErrorFromValue<Values[number]> | TemplateFailure,
+      Template.ContextFromValue<Values[number]>
+    >(
+      (
+        emit,
+      ): Effect.Effect<
+        void,
+        Template.ErrorFromValue<Values[number]> | TemplateFailure,
+        Template.ContextFromValue<Values[number]>
+      > =>
+        Effect.gen(function* () {
+          const fiberId = yield* Effect.fiberId
+          const buffer = utils.withBuffers(values.length, emit, fiberId)
+          
+          // Process first template part with dedentation
+          const firstPart = utils.processTemplatePart(
+            templateStrings[0],
+            minIndent,
+            indent,
+            true,
+            null,
+          )
+          yield* Effect.promise(() => emit.single(firstPart))
+          let lastContent = firstPart
+          
+          yield* Effect.forEach(
+            parts,
+            (part, index) => {
+              if (part === 'static') {
+                // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
+                const staticValue = staticParts.get(index)!
+                const processedValue = utils.processValuePart(
+                  staticValue,
+                  minIndent,
+                  indent,
+                  lastContent,
+                )
+                const nextTemplate = utils.processTemplatePart(
+                  templateStrings[index + 1],
+                  minIndent,
+                  indent,
+                  false,
+                  processedValue,
+                )
+                lastContent = nextTemplate
+                return buffer
+                  .onSuccess(index, processedValue)
+                  .pipe(
+                    Effect.zipRight(buffer.onSuccess(index, nextTemplate)),
+                    Effect.zipRight(buffer.onEnd(index)),
+                  )
+              }
+
+              // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
+              const [name, encode] = dynamicParts.get(index)!
+              return encode(name === null ? {} : params[name as keyof typeof params]).pipe(
+                Effect.map((value) => utils.processValuePart(value, minIndent, indent, lastContent)),
+                Effect.flatMap((processedValue) => {
+                  const nextTemplate = utils.processTemplatePart(
+                    templateStrings[index + 1],
+                    minIndent,
+                    indent,
+                    false,
+                    processedValue,
+                  )
+                  lastContent = nextTemplate
+                  return buffer
+                    .onSuccess(index, processedValue)
+                    .pipe(
+                      Effect.zipRight(buffer.onSuccess(index, nextTemplate)),
+                      Effect.zipRight(buffer.onEnd(index)),
+                    )
+                }),
+              )
+            },
+            { concurrency: 'unbounded' },
+          )
+        }),
+    )
+}
+
+const compileParametersSchemaCache = new WeakMap<TemplateImpl<any, any>, CompiledParameters>()
+
+type CompiledParameters = {
+  fields: Record<string, Schema.Schema<any, string, any>>
+  staticParts: Map<number, string>
+  dynamicParts: Map<number, [string | null, (...params: any[]) => Effect.Effect<string, any, any>]>
+  parts: Array<'static' | 'dynamic'>
+}
+
+function compileParameters<
+  const Name extends string,
+  const Values extends ReadonlyArray<Template.AnyParamType>,
+>(t: TemplateImpl<Name, Values>, indent: boolean): CompiledParameters {
+  const cached = compileParametersSchemaCache.get(t)
+  if (cached) return cached as CompiledParameters
+
+  const { values } = t
   const fields: Record<string, Schema.Schema<any, string, any>> = {}
   const staticParts = new Map<number, string>()
   const dynamicParts = new Map<
@@ -461,6 +600,21 @@ function compileParametersSchema<
     }
   }
 
+  compileParametersSchemaCache.set(t, { fields, staticParts, dynamicParts, parts })
+
+  return { fields, staticParts, dynamicParts, parts } as any
+}
+
+function compileParametersSchema<
+  const Name extends string,
+  const Values extends ReadonlyArray<Template.AnyParamType>,
+>(
+  t: TemplateImpl<Name, Values>,
+  indent: boolean,
+): Schema.Schema<Template.Parameters<Values>, string, any> {
+  const { template, values } = t
+  const { fields, staticParts, dynamicParts, parts } = compileParameters(t, indent)
+
   const schema = Schema.transformOrFail(Schema.String, Schema.Struct(fields), {
     strict: true,
     decode: () =>
@@ -493,8 +647,6 @@ function compileParametersSchema<
       )
     },
   })
-
-  compileParametersSchemaCache.set(t, schema)
 
   return schema as any
 }
