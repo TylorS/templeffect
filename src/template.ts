@@ -24,9 +24,9 @@ export interface Template<
   readonly values: Values
 
   (
-    ...[params]: [keyof Template.Parameters<Values>] extends [never]
-      ? [{}?]
-      : [Template.Parameters<Values>]
+    ...[params]: HasRequiredKeys<Template.Parameters<Values>> extends true
+      ? [Template.Parameters<Values>]
+      : [Template.Parameters<Values>?]
   ): Effect.Effect<
     TemplateResult<Name, Template.Parameters<Values>>,
     Template.ErrorFromValue<Values[number]> | TemplateFailure,
@@ -34,15 +34,17 @@ export interface Template<
   >
 
   readonly stream: (
-    ...[params]: [keyof Template.Parameters<Values>] extends [never]
-      ? [{}?]
-      : [Template.Parameters<Values>]
+    ...[params]: HasRequiredKeys<Template.Parameters<Values>> extends true
+      ? [Template.Parameters<Values>]
+      : [Template.Parameters<Values>?]
   ) => Stream.Stream<
     string,
     Template.ErrorFromValue<Values[number]> | TemplateFailure,
     Template.ContextFromValue<Values[number]>
   >
 }
+
+type HasRequiredKeys<T> = {} extends T ? false : true
 
 export interface TemplateResult<Name, Params> {
   readonly name: Name

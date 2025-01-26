@@ -221,7 +221,7 @@ describe('templeffect', () => {
         </html>"
       `)
 
-      const result2 = yield* template({})
+      const result2 = yield* template()
       expect(result2.output).toMatchInlineSnapshot(`
         "<html>
           <body>
