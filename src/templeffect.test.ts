@@ -22,6 +22,26 @@ describe('templeffect', () => {
     }),
   )
 
+  it.effect('supports effects as parameters', () =>
+    Effect.gen(function* () {
+      const makeHtml = T.template('foo')`<html>
+  <body>
+    <h1>Hello, ${T.param('name')}!</h1>
+  </body>
+</html>`
+
+      const world: Effect.Effect<string, Error, never> = Effect.succeed('world')
+      const result = yield* makeHtml({ name: world })
+      expect(result.output).toMatchInlineSnapshot(`
+        "<html>
+          <body>
+            <h1>Hello, world!</h1>
+          </body>
+        </html>"
+      `)
+    }),
+  )
+
   it.effect('supports streaming', () =>
     Effect.gen(function* () {
       const makeHtml = T.template('foo')`<html>
@@ -232,4 +252,3 @@ describe('templeffect', () => {
     }),
   )
 })
-

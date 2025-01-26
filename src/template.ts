@@ -6,6 +6,7 @@ import {
   ParseResult,
   pipe,
   Pipeable,
+  Record,
   Schema,
   Stream,
   type Types,
@@ -23,26 +24,34 @@ export interface Template<
   readonly template: TemplateStringsArray
   readonly values: Values
 
-  (
-    ...[params]: HasRequiredKeys<Template.Parameters<Values>> extends true
+  <
+    Params extends HasRequiredKeys<Template.Parameters<Values>> extends true
       ? [Template.Parameters<Values>]
-      : [Template.Parameters<Values>?]
+      : [Template.Parameters<Values>?],
+  >(
+    ...[params]: Params
   ): Effect.Effect<
-    TemplateResult<Name, Template.Parameters<Values>>,
-    Template.ErrorFromValue<Values[number]> | TemplateFailure,
-    Template.ContextFromValue<Values[number]>
+    TemplateResult<Name, Params>,
+    Template.ErrorFromValue<Values[number]> | Template.ErrorFromParams<Params[0]> | TemplateFailure,
+    Template.ContextFromValue<Values[number]> | Template.ContextFromParams<Params[0]>
   >
 
-  readonly stream: (
-    ...[params]: HasRequiredKeys<Template.Parameters<Values>> extends true
+  readonly stream: <
+    Params extends HasRequiredKeys<Template.Parameters<Values>> extends true
       ? [Template.Parameters<Values>]
-      : [Template.Parameters<Values>?]
+      : [Template.Parameters<Values>?],
+  >(
+    ...[params]: Params
   ) => Stream.Stream<
     string,
     Template.ErrorFromValue<Values[number]> | TemplateFailure,
     Template.ContextFromValue<Values[number]>
   >
 }
+
+export type Parameters<T extends Template<any, any>> = T extends Template<any, infer Values>
+  ? Template.Parameters<Values>
+  : never
 
 type HasRequiredKeys<T> = {} extends T ? false : true
 
@@ -65,7 +74,11 @@ export declare namespace Template {
     | Unsafe
 
   export type Parameters<Values extends ReadonlyArray<AnyParamType>> = Types.Simplify<
-    DeriveParameters<Values, {}>
+    DeriveParameters<Values, true, {}>
+  >
+
+  export type ResolvedParameters<Values extends ReadonlyArray<AnyParamType>> = Types.Simplify<
+    DeriveParameters<Values, false, {}>
   >
 
   export type Error<T extends Template<any, any>> = T extends Template<any, infer Values>
@@ -74,9 +87,13 @@ export declare namespace Template {
 
   type ErrorFromValue<T extends Template.AnyParamType> = T extends Effect.Effect<any, any, any>
     ? Effect.Effect.Error<T>
-    : T extends Template.Any
-      ? ErrorFromValue<T['values'][number]>
+    : T extends Template<infer _, infer Values>
+      ? ErrorFromValue<Values[number]>
       : never
+
+  type ErrorFromParams<T> = {
+    [K in keyof T]: T[K] extends Effect.Effect<any, any, any> ? Effect.Effect.Error<T[K]> : never
+  }[keyof T]
 
   export type Context<T extends Template<any, any>> = T extends Template<any, infer Values>
     ? ContextFromValue<Values[number]>
@@ -90,23 +107,39 @@ export declare namespace Template {
       ? ContextFromValue<Values[number]>
       : never
 
+  type ContextFromParams<T> = {
+    [K in keyof T]: T[K] extends Effect.Effect<any, any, infer R>
+      ? R
+      : T[K] extends Template<any, infer Values>
+        ? ContextFromValue<Values[number]>
+        : never
+  }[keyof T]
+
   type DeriveParameters<
     Values extends ReadonlyArray<any>,
+    IncludeEffects extends boolean,
     Result extends Record<string, any>,
   > = Values extends readonly [infer First, ...infer Rest]
-    ? [First] extends [Parameter<infer Name, infer A, infer I, infer R, infer Optional>]
-      ? DeriveParameters<
-          Rest,
-          Result &
-            (Optional extends true ? { readonly [K in Name]?: A } : { readonly [K in Name]: A })
-        >
-      : [First] extends [Template<infer Name, infer TemplateValues>]
-        ? DeriveParameters<
-            Rest,
-            Result & { readonly [K in Name]: Template.Parameters<TemplateValues> }
-          >
-        : DeriveParameters<Rest, Result>
+    ? DeriveParameters<Rest, IncludeEffects, Result & DeriveParameter<First, IncludeEffects>>
     : Result
+
+  type DeriveParameter<Value, IncludeEffects extends boolean> = [Value] extends [
+    Parameter<infer Name, infer A, infer _I, infer _R, infer Optional>,
+  ]
+    ? Optional extends true
+      ? {
+          readonly [K in Name]?:
+            | A
+            | (IncludeEffects extends true ? Effect.Effect<A, any, any> : never)
+        }
+      : {
+          readonly [K in Name]:
+            | A
+            | (IncludeEffects extends true ? Effect.Effect<A, any, any> : never)
+        }
+    : [Value] extends [Template<infer Name, infer Values extends ReadonlyArray<any>>]
+      ? { readonly [K in Name]: DeriveParameters<Values, IncludeEffects, {}> }
+      : {}
 }
 
 /**
@@ -404,15 +437,19 @@ export function json<const Name extends string>(
 }
 
 type CompiledTemplate<Name extends string, Values extends ReadonlyArray<Template.AnyParamType>> = (
-  params: Template.Parameters<Values>,
+  params: Template.ResolvedParameters<Values>,
 ) => Effect.Effect<
-  { readonly name: Name; readonly params: Template.Parameters<Values>; readonly output: string },
+  {
+    readonly name: Name
+    readonly params: Template.ResolvedParameters<Values>
+    readonly output: string
+  },
   Template.ErrorFromValue<Values[number]> | TemplateFailure,
   Template.ContextFromValue<Values[number]>
 >
 
-type StreamedTemplate<Name extends string, Values extends ReadonlyArray<Template.AnyParamType>> = (
-  params: Template.Parameters<Values>,
+type StreamedTemplate<Values extends ReadonlyArray<Template.AnyParamType>> = (
+  params: Template.ResolvedParameters<Values>,
 ) => Stream.Stream<
   string,
   Template.ErrorFromValue<Values[number]> | TemplateFailure,
@@ -449,7 +486,7 @@ function liftImpl<
 >(
   impl: TemplateImpl<Name, Values>,
   f: (impl: TemplateImpl<Name, Values>) => CompiledTemplate<Name, Values>,
-  g: (impl: TemplateImpl<Name, Values>) => StreamedTemplate<Name, Values>,
+  g: (impl: TemplateImpl<Name, Values>) => StreamedTemplate<Values>,
 ): Template<Name, Values> {
   // Lazily compiled template
   let compiled: CompiledTemplate<Name, Values> | null = null
@@ -460,7 +497,7 @@ function liftImpl<
     return compiled(params)
   }
 
-  let streamed: StreamedTemplate<Name, Values> | null = null
+  let streamed: StreamedTemplate<Values> | null = null
   function liftedStream(params: Template.Parameters<Values>) {
     if (!streamed) {
       streamed = g(impl)
@@ -495,66 +532,68 @@ function compile<
   const Values extends ReadonlyArray<Template.AnyParamType>,
 >(template: TemplateImpl<Name, Values>, indent: boolean): CompiledTemplate<Name, Values> {
   const compiled = compileParametersSchema(template, indent)
-  return (params = {} as Template.Parameters<Values>) =>
+  return <P extends Template.Parameters<Values>>(params: P = {} as P) =>
     pipe(
-      params,
-      encode_(compiled),
+      Effect.flatMap(unwrap<Values, P>(params), encode_(compiled)),
       Effect.catchTag('ParseError', TemplateFailure.fromParseError),
       Effect.map((output) => ({ name: template.name, params, output })),
     )
 }
 
+const UNBOUNDED_CONCURRENCY = { concurrency: 'unbounded' } as const
+
+function unwrap<
+  const Values extends ReadonlyArray<Template.AnyParamType>,
+  const P extends Template.Parameters<Values>,
+>(
+  params: P,
+): Effect.Effect<
+  Template.ResolvedParameters<Values>,
+  {
+    [K in keyof P]: P[K] extends Effect.Effect<any, any, any> ? Effect.Effect.Error<P[K]> : never
+  }[keyof P],
+  {
+    [K in keyof P]: P[K] extends Effect.Effect<any, any, any> ? Effect.Effect.Context<P[K]> : never
+  }[keyof P]
+> {
+  return Effect.all(
+    Record.map(params as {}, (v) => (Effect.isEffect(v) ? v : Effect.succeed(v))) as any,
+    UNBOUNDED_CONCURRENCY,
+  ) as any
+}
+
 function compileStream<
   const Name extends string,
   const Values extends ReadonlyArray<Template.AnyParamType>,
->(template: TemplateImpl<Name, Values>, indent: boolean): StreamedTemplate<Name, Values> {
+>(template: TemplateImpl<Name, Values>, indent: boolean): StreamedTemplate<Values> {
   const { values, template: templateStrings } = template
   const { parts, staticParts, dynamicParts } = compileParameters(template, indent)
   const minIndent = utils.getMinIndent(templateStrings)
 
-  return (params = {} as Template.Parameters<Values>) =>
+  return <P extends Template.Parameters<Values>>(params: P = {} as P) =>
     Stream.asyncEffect<
       string,
       Template.ErrorFromValue<Values[number]> | TemplateFailure,
       Template.ContextFromValue<Values[number]>
     >((emit) =>
-      Effect.fiberIdWith((fiberId) => {
-        const buffer = utils.withBuffers(values.length, emit, fiberId)
-        const firstPart = utils.processTemplatePart(
-          templateStrings[0],
-          minIndent,
-          indent,
-          true,
-          null,
-        )
-        return Effect.promise(() => emit.single(firstPart)).pipe(
-          Effect.zipRight(
-            Effect.forEach(parts, (part: 'static' | 'dynamic', index: number) => {
-              const lastContent = templateStrings[index]
-              if (part === 'static') {
-                // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
-                const staticValue = staticParts.get(index)!
-                const processedValue = utils.processValuePart(staticValue, indent, lastContent)
-                const nextTemplate = utils.processTemplatePart(
-                  templateStrings[index + 1],
-                  minIndent,
-                  indent,
-                  false,
-                  processedValue,
-                )
-                return buffer
-                  .onSuccess(index, processedValue)
-                  .pipe(
-                    Effect.zipRight(buffer.onSuccess(index, nextTemplate)),
-                    Effect.zipRight(buffer.onEnd(index)),
-                  )
-              }
-
-              // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
-              const [name, encode, fallback] = dynamicParts.get(index)!
-              return encode(name === null ? {} : params[name as keyof typeof params]).pipe(
-                Effect.map((value) => utils.processValuePart(value, indent, lastContent)),
-                Effect.flatMap((processedValue) => {
+      Effect.flatMap(unwrap<Values, P>(params), (params: Template.ResolvedParameters<Values>) =>
+        Effect.fiberIdWith((fiberId) => {
+          const buffer = utils.withBuffers(values.length, emit, fiberId)
+          const firstPart = utils.processTemplatePart(
+            templateStrings[0],
+            minIndent,
+            indent,
+            true,
+            null,
+          )
+          return Effect.promise(() => emit.single(firstPart)).pipe(
+            Effect.zipRight(
+              Effect.forEach(parts, (part: 'static' | 'dynamic', index: number) => {
+                const lastContent = templateStrings[index]
+                if (part === 'static') {
+                  // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
+                  const staticValue = staticParts.get(index)!
+                  const processedValue = utils.processValuePart(staticValue, indent, lastContent)
                   const nextTemplate = utils.processTemplatePart(
                     templateStrings[index + 1],
                     minIndent,
@@ -568,12 +607,35 @@ function compileStream<
                       Effect.zipRight(buffer.onSuccess(index, nextTemplate)),
                       Effect.zipRight(buffer.onEnd(index)),
                     )
-                }),
-              )
-            }),
-          ),
-        )
-      }),
+                }
+
+                // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
+                const [name, encode, fallback] = dynamicParts.get(index)!
+                return encode(
+                  name === null ? {} : (params[name as keyof typeof params] ?? fallback?.()),
+                ).pipe(
+                  Effect.map((value) => utils.processValuePart(value, indent, lastContent)),
+                  Effect.flatMap((processedValue) => {
+                    const nextTemplate = utils.processTemplatePart(
+                      templateStrings[index + 1],
+                      minIndent,
+                      indent,
+                      false,
+                      processedValue,
+                    )
+                    return buffer
+                      .onSuccess(index, processedValue)
+                      .pipe(
+                        Effect.zipRight(buffer.onSuccess(index, nextTemplate)),
+                        Effect.zipRight(buffer.onEnd(index)),
+                      )
+                  }),
+                )
+              }),
+            ),
+          )
+        }),
+      ),
     )
 }
 
