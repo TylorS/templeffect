@@ -203,4 +203,33 @@ describe('templeffect', () => {
       `)
     }),
   )
+
+  it.effect('supports optional parameters', () =>
+    Effect.gen(function* () {
+      const template = T.dedent('optional')`<html>
+        <body>
+          <h1>Hello, ${T.param('name').optional('world')}!</h1>
+        </body>
+      </html>`
+
+      const result = yield* template({ name: 'Effect' })
+      expect(result.output).toMatchInlineSnapshot(`
+        "<html>
+          <body>
+            <h1>Hello, Effect!</h1>
+          </body>
+        </html>"
+      `)
+
+      const result2 = yield* template({})
+      expect(result2.output).toMatchInlineSnapshot(`
+        "<html>
+          <body>
+            <h1>Hello, world!</h1>
+          </body>
+        </html>"
+      `)
+    }),
+  )
 })
+

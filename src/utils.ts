@@ -12,7 +12,7 @@ const indentCache = new WeakMap<TemplateStringsArray, number>()
  */
 export function processTemplate(
   template: TemplateStringsArray,
-  values: ReadonlyArray<string | Unsafe>,
+  values: ReadonlyArray<string | Unsafe | null | undefined>,
   shouldDedent: boolean,
 ): string {
   // Fast path for empty or single-part templates
@@ -37,7 +37,7 @@ export function processTemplate(
  */
 function processSimpleTemplate(
   template: TemplateStringsArray,
-  values: ReadonlyArray<string | Unsafe>,
+  values: ReadonlyArray<string | Unsafe | null | undefined>,
 ): string {
   // Use array join for better performance with pre-allocated size
   const result = new Array(template.length + values.length)
@@ -52,7 +52,8 @@ function processSimpleTemplate(
   return result.join('')
 }
 
-function toString(value: string | Unsafe): string {
+function toString(value: string | Unsafe | null | undefined): string {
+  if (value === null || value === undefined) return ''
   if (typeof value === 'string') return value
   return value.content
 }
@@ -62,7 +63,7 @@ function toString(value: string | Unsafe): string {
  */
 function processDedentTemplate(
   template: TemplateStringsArray,
-  values: ReadonlyArray<string | Unsafe>,
+  values: ReadonlyArray<string | Unsafe | null | undefined>,
   minIndent: number,
 ): string {
   // Fast path for no indentation
@@ -111,7 +112,8 @@ function processTemplateSection(templatePart: string, minIndent: number): string
 /**
  * Process an interpolated value, handling multiline strings and unsafe content
  */
-function processValue(value: string | Unsafe, previousContent: string): string {
+function processValue(value: string | Unsafe | null | undefined, previousContent: string): string {
+  if (value === null || value === undefined) return ''
   if (typeof value !== 'string') return value.content
 
   const valueString = value.toString()
@@ -389,7 +391,6 @@ export function processTemplatePart(
  */
 export function processValuePart(
   value: string | Unsafe,
-  minIndent: number,
   shouldDedent: boolean,
   previousContent: string,
 ): string {

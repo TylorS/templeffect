@@ -3,7 +3,11 @@ import { Schema } from 'effect'
 /**
  * Marks content as unsafe/raw, skipping indentation processing
  */
-export class Unsafe extends Schema.TaggedClass<Unsafe>()('Unsafe', { content: Schema.String }) {}
+export class Unsafe extends Schema.TaggedClass<Unsafe>()('Unsafe', { content: Schema.String }) {
+  toString(): string {
+    return this.content
+  }
+}
 
 export class UnsafeFromString extends Schema.transform(Unsafe, Schema.String, {
   strict: true,

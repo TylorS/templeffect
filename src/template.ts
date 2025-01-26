@@ -1,4 +1,5 @@
 import {
+  type BigDecimal,
   Duration,
   Effect,
   identity,
@@ -56,7 +57,7 @@ export declare namespace Template {
 
   export type AnyParamType =
     | Primitive
-    | Parameter<any, any>
+    | Parameter<any, any, any, any, boolean>
     | Effect.Effect<Primitive, any, any>
     | Template<any, readonly any[]>
     | Unsafe
@@ -91,8 +92,12 @@ export declare namespace Template {
     Values extends ReadonlyArray<any>,
     Result extends Record<string, any>,
   > = Values extends readonly [infer First, ...infer Rest]
-    ? [First] extends [Parameter<infer Name, infer Schema>]
-      ? DeriveParameters<Rest, Result & { readonly [K in Name]: Schema.Schema.Type<Schema> }>
+    ? [First] extends [Parameter<infer Name, infer A, infer I, infer R, infer Optional>]
+      ? DeriveParameters<
+          Rest,
+          Result &
+            (Optional extends true ? { readonly [K in Name]?: A } : { readonly [K in Name]: A })
+        >
       : [First] extends [Template<infer Name, infer TemplateValues>]
         ? DeriveParameters<
             Rest,
@@ -178,14 +183,19 @@ export class TemplateFailure extends Schema.TaggedError<TemplateFailure>()('Temp
 
 export class Parameter<
   Name extends string,
-  Schema extends Schema.Schema<any, string, any> | Schema.Schema<any, Unsafe, any>,
+  A,
+  I extends string | Unsafe | null | undefined,
+  R,
+  Optional extends boolean = false,
 > implements Pipeable.Pipeable
 {
   readonly _tag = 'Parameter'
 
   constructor(
     readonly name: Name,
-    readonly schema: Schema,
+    readonly schema: Schema.Schema<A, I, R>,
+    readonly isOptional: Optional,
+    readonly fallback: () => string,
   ) {}
 
   pipe() {
@@ -193,75 +203,103 @@ export class Parameter<
     return Pipeable.pipeArguments(this, arguments)
   }
 
-  unsafe<A, R>(this: Parameter<Name, Schema.Schema<A, string, R>>) {
+  unsafe(this: Parameter<Name, A, string, R, Optional>): Parameter<Name, A, Unsafe, R, Optional> {
     return asUnsafe(this)
+  }
+
+  optional(
+    this: Parameter<Name, A, string, R, Optional> | Parameter<Name, A, Unsafe, R, Optional>,
+    fallback: string | (() => string) = () => '',
+  ): this extends Parameter<Name, A, string, R, Optional>
+    ? Parameter<Name, A | null | undefined, string | null | undefined, R, true>
+    : Parameter<Name, A | null | undefined, Unsafe | null | undefined, R, true> {
+    return paramWithSchema(this.name, Schema.NullishOr(this.schema), true, fallback) as any
   }
 }
 
 export function paramWithSchema<
   const Name extends string,
-  const Schema extends Schema.Schema<any, string, any> | Schema.Schema<any, Unsafe, any>,
->(name: Name, schema: Schema): Parameter<Name, Schema> {
-  return new Parameter(name, schema)
+  const A,
+  const I extends string | Unsafe | null | undefined,
+  const R,
+  const Optional extends boolean = false,
+>(
+  name: Name,
+  schema: Schema.Schema<A, I, R>,
+  optional: Optional = false as Optional,
+  fallback: string | (() => string) = () => '',
+): Parameter<Name, A, I, R, Optional> {
+  return new Parameter(
+    name,
+    schema,
+    optional,
+    typeof fallback === 'function' ? fallback : () => fallback,
+  )
 }
 
 export function param<const Name extends string>(
   name: Name,
-): Parameter<Name, typeof Schema.String> {
+): Parameter<Name, string, string, never, false> {
   return paramWithSchema(name, Schema.String)
 }
 
 export function unsafe<const Name extends string>(
   name: Name,
-): Parameter<Name, typeof UnsafeFromString> {
+): Parameter<Name, string, Unsafe, never, false> {
   return paramWithSchema(name, UnsafeFromString)
 }
 
 export function number<const Name extends string>(
   name: Name,
-): Parameter<Name, typeof Schema.NumberFromString> {
+): Parameter<Name, number, string, never, false> {
   return paramWithSchema(name, Schema.NumberFromString)
 }
 
 export function boolean<const Name extends string>(
   name: Name,
-): Parameter<Name, Schema.SchemaClass<boolean, string, never>> {
+): Parameter<Name, boolean, string, never, false> {
   return paramWithSchema(name, Schema.compose(Schema.String, Schema.BooleanFromString))
 }
 
 export function integer<const Name extends string>(
   name: Name,
-): Parameter<Name, Schema.SchemaClass<number, string, never>> {
+): Parameter<Name, number, string, never, false> {
   return paramWithSchema(name, Schema.compose(Schema.NumberFromString, Schema.Int))
 }
 
-export function uuid<const Name extends string>(name: Name): Parameter<Name, typeof Schema.UUID> {
+export function uuid<const Name extends string>(
+  name: Name,
+): Parameter<Name, string, string, never, false> {
   return paramWithSchema(name, Schema.UUID)
 }
 
-export function ulid<const Name extends string>(name: Name): Parameter<Name, typeof Schema.ULID> {
+export function ulid<const Name extends string>(
+  name: Name,
+): Parameter<Name, string, string, never, false> {
   return paramWithSchema(name, Schema.ULID)
 }
 
-export function date<const Name extends string>(name: Name): Parameter<Name, typeof Schema.Date> {
+export function date<const Name extends string>(
+  name: Name,
+): Parameter<Name, Date, string, never, false> {
   return paramWithSchema(name, Schema.Date)
 }
 
 export function bigInt<const Name extends string>(
   name: Name,
-): Parameter<Name, typeof Schema.BigInt> {
+): Parameter<Name, bigint, string, never, false> {
   return paramWithSchema(name, Schema.BigInt)
 }
 
 export function bigDecimal<const Name extends string>(
   name: Name,
-): Parameter<Name, typeof Schema.BigDecimal> {
+): Parameter<Name, BigDecimal.BigDecimal, string, never, false> {
   return paramWithSchema(name, Schema.BigDecimal)
 }
 
 export function duration<const Name extends string>(
   name: Name,
-): Parameter<Name, Schema.SchemaClass<Duration.Duration, string, never>> {
+): Parameter<Name, Duration.Duration, string, never, false> {
   return paramWithSchema(
     name,
     Schema.transform(Schema.String, Schema.DurationFromSelf, {
@@ -272,12 +310,18 @@ export function duration<const Name extends string>(
   )
 }
 
-export function asUnsafe<const Name extends string, A, R>(
-  parameter: Parameter<Name, Schema.Schema<A, string, R>>,
-) {
-  return paramWithSchema(
+export function asUnsafe<
+  const Name extends string,
+  A,
+  I extends string,
+  R,
+  Optional extends boolean,
+>(parameter: Parameter<Name, A, I, R, Optional>) {
+  return paramWithSchema<Name, A, Unsafe, R, Optional>(
     parameter.name,
     swap(Schema.compose(swap(parameter.schema), StringToUnsafe)),
+    parameter.isOptional,
+    parameter.fallback,
   )
 }
 
@@ -353,7 +397,7 @@ const ArbitraryJson = (space?: string | number) =>
 export function json<const Name extends string>(
   name: Name,
   space?: string | number,
-): Parameter<Name, Schema.SchemaClass<unknown, string, never>> {
+): Parameter<Name, unknown, string, never, false> {
   return paramWithSchema(name, ArbitraryJson(space))
 }
 
@@ -488,12 +532,7 @@ function compileStream<
               if (part === 'static') {
                 // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
                 const staticValue = staticParts.get(index)!
-                const processedValue = utils.processValuePart(
-                  staticValue,
-                  minIndent,
-                  indent,
-                  lastContent,
-                )
+                const processedValue = utils.processValuePart(staticValue, indent, lastContent)
                 const nextTemplate = utils.processTemplatePart(
                   templateStrings[index + 1],
                   minIndent,
@@ -510,11 +549,9 @@ function compileStream<
               }
 
               // biome-ignore lint/style/noNonNullAssertion: We know the buffer exists
-              const [name, encode] = dynamicParts.get(index)!
+              const [name, encode, fallback] = dynamicParts.get(index)!
               return encode(name === null ? {} : params[name as keyof typeof params]).pipe(
-                Effect.map((value) =>
-                  utils.processValuePart(value, minIndent, indent, lastContent),
-                ),
+                Effect.map((value) => utils.processValuePart(value, indent, lastContent)),
                 Effect.flatMap((processedValue) => {
                   const nextTemplate = utils.processTemplatePart(
                     templateStrings[index + 1],
@@ -543,7 +580,14 @@ const compileParametersSchemaCache = new WeakMap<TemplateImpl<any, any>, Compile
 type CompiledParameters = {
   fields: Record<string, Schema.Schema<any, string, any>>
   staticParts: Map<number, string>
-  dynamicParts: Map<number, [string | null, (...params: any[]) => Effect.Effect<string, any, any>]>
+  dynamicParts: Map<
+    number,
+    [
+      key: string | null,
+      encode: (...params: any[]) => Effect.Effect<string, any, any>,
+      fallback?: () => string,
+    ]
+  >
   parts: Array<'static' | 'dynamic'>
 }
 
@@ -559,7 +603,11 @@ function compileParameters<
   const staticParts = new Map<number, string>()
   const dynamicParts = new Map<
     number,
-    [string | null, (...params: any[]) => Effect.Effect<string, any, any>]
+    [
+      key: string | null,
+      encode: (...params: any[]) => Effect.Effect<string, any, any>,
+      fallback?: () => string,
+    ]
   >()
   const parts: Array<'static' | 'dynamic'> = Array(values.length)
 
@@ -576,7 +624,15 @@ function compileParameters<
       parts[i] = 'dynamic'
     } else if (value._tag === 'Parameter') {
       fields[value.name] = Schema.typeSchema(value.schema)
-      dynamicParts.set(i, [value.name, encode_(value.schema)])
+      const tuple: [
+        key: string | null,
+        encode: (...params: any[]) => Effect.Effect<string, any, any>,
+        fallback?: () => string,
+      ] = [value.name, encode_(value.schema)]
+      if (value.isOptional) {
+        tuple.push(value.fallback)
+      }
+      dynamicParts.set(i, tuple)
       parts[i] = 'dynamic'
     } else if (value._tag === 'Template') {
       const valueSchema: Schema.Schema<any, string, any> = compileParametersSchema(value, indent)
@@ -613,7 +669,7 @@ function compileParametersSchema<
       return Effect.map(
         Effect.forEach(
           dynamicParts.values(),
-          ([name, encode]) => encode(name === null ? {} : input[name]),
+          ([name, encode, fallback]) => encode(name === null ? {} : (input[name] ?? fallback?.())),
           { concurrency: 'unbounded' },
         ),
         (computed) => {
