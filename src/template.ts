@@ -31,7 +31,7 @@ export interface Template<
   >(
     ...[params]: Params
   ): Effect.Effect<
-    TemplateResult<Name, Params>,
+    string,
     Template.ErrorFromValue<Values[number]> | Template.ErrorFromParams<Params[0]> | TemplateFailure,
     Template.ContextFromValue<Values[number]> | Template.ContextFromParams<Params[0]>
   >
@@ -54,12 +54,6 @@ export type Parameters<T extends Template<any, any>> = T extends Template<any, i
   : never
 
 type HasRequiredKeys<T> = {} extends T ? false : true
-
-export interface TemplateResult<Name, Params> {
-  readonly name: Name
-  readonly params: Params
-  readonly output: string
-}
 
 export declare namespace Template {
   export type Any = Template<any, readonly any[]>
@@ -436,14 +430,10 @@ export function json<const Name extends string>(
   return paramWithSchema(name, ArbitraryJson(space))
 }
 
-type CompiledTemplate<Name extends string, Values extends ReadonlyArray<Template.AnyParamType>> = (
+type CompiledTemplate<Values extends ReadonlyArray<Template.AnyParamType>> = (
   params: Template.ResolvedParameters<Values>,
 ) => Effect.Effect<
-  {
-    readonly name: Name
-    readonly params: Template.ResolvedParameters<Values>
-    readonly output: string
-  },
+  string,
   Template.ErrorFromValue<Values[number]> | TemplateFailure,
   Template.ContextFromValue<Values[number]>
 >
@@ -485,11 +475,11 @@ function liftImpl<
   const Values extends ReadonlyArray<Template.AnyParamType>,
 >(
   impl: TemplateImpl<Name, Values>,
-  f: (impl: TemplateImpl<Name, Values>) => CompiledTemplate<Name, Values>,
+  f: (impl: TemplateImpl<Name, Values>) => CompiledTemplate<Values>,
   g: (impl: TemplateImpl<Name, Values>) => StreamedTemplate<Values>,
 ): Template<Name, Values> {
   // Lazily compiled template
-  let compiled: CompiledTemplate<Name, Values> | null = null
+  let compiled: CompiledTemplate<Values> | null = null
   function lifted(params: Template.Parameters<Values>) {
     if (!compiled) {
       compiled = f(impl)
@@ -530,14 +520,13 @@ class TemplateImpl<
 function compile<
   const Name extends string,
   const Values extends ReadonlyArray<Template.AnyParamType>,
->(template: TemplateImpl<Name, Values>, indent: boolean): CompiledTemplate<Name, Values> {
+>(template: TemplateImpl<Name, Values>, indent: boolean): CompiledTemplate<Values> {
   const compiled = compileParametersSchema(template, indent)
   return <P extends Template.Parameters<Values>>(params: P = {} as P) =>
     pipe(
       Effect.flatMap(unwrap<Values, P>(params), encode_(compiled)),
       Effect.catchTag('ParseError', TemplateFailure.fromParseError),
-      Effect.map((output) => ({ name: template.name, params, output })),
-    )
+    ) as any
 }
 
 const UNBOUNDED_CONCURRENCY = { concurrency: 'unbounded' } as const

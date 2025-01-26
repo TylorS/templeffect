@@ -12,7 +12,7 @@ describe('templeffect', () => {
 </html>`
 
       const result = yield* makeHtml({ name: 'world' })
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "<html>
           <body>
             <h1>Hello, world!</h1>
@@ -32,7 +32,7 @@ describe('templeffect', () => {
 
       const world: Effect.Effect<string, Error, never> = Effect.succeed('world')
       const result = yield* makeHtml({ name: world })
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "<html>
           <body>
             <h1>Hello, world!</h1>
@@ -75,7 +75,7 @@ describe('templeffect', () => {
                                        </html>`
 
       const result = yield* makeHtml({ name: 'world' })
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "<html>
           <body>
             <h1>Hello, world!</h1>
@@ -122,7 +122,7 @@ describe('templeffect', () => {
                                       </html>`
 
       const result = yield* makeHtml({ timestamp })
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "<html>
           <body>
             <h1>Its currently 2024-12-24T12:00:00.000Z!</h1>
@@ -147,7 +147,7 @@ describe('templeffect', () => {
                               </html>`
 
       const result = yield* B({ A: { name: 'world' } })
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "<html>
           <body>
             <section>
@@ -168,7 +168,7 @@ describe('templeffect', () => {
                                        </html>`
 
       const result = yield* makeHtml()
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "<html>
           <body>
             <h1>Hello, world!</h1>
@@ -205,7 +205,7 @@ describe('templeffect', () => {
         data: { hello: 'world' },
       })
 
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "
         <div>
           <p>Number: 42.5</p>
@@ -233,7 +233,7 @@ describe('templeffect', () => {
       </html>`
 
       const result = yield* template({ name: 'Effect' })
-      expect(result.output).toMatchInlineSnapshot(`
+      expect(result).toMatchInlineSnapshot(`
         "<html>
           <body>
             <h1>Hello, Effect!</h1>
@@ -242,7 +242,7 @@ describe('templeffect', () => {
       `)
 
       const result2 = yield* template()
-      expect(result2.output).toMatchInlineSnapshot(`
+      expect(result2).toMatchInlineSnapshot(`
         "<html>
           <body>
             <h1>Hello, world!</h1>
