@@ -256,7 +256,7 @@ describe('templeffect', () => {
     Effect.gen(function* () {
       const template = T.dedent('forEach')`<html>
         <body>
-          <h1>Hello, ${T.forEach(T.param('names'), (name) => Effect.succeed(name), ', ')}</h1>
+          <h1>Hello, ${T.forEach(T.param('names'), ({ value }) => value, ', ')}</h1>
         </body>
       </html>`
 
@@ -265,6 +265,51 @@ describe('templeffect', () => {
         "<html>
           <body>
             <h1>Hello, John, Jane</h1>
+          </body>
+        </html>"
+      `)
+    }),
+  )
+
+  it.effect('supports with', () =>
+    Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const template = T.dedent('with')`<html>
+          <body>
+            <h1>Hello, ${T.with(T.param('name'), ({ value }) => value.toUpperCase())}</h1>
+          </body>
+        </html>`
+
+        const result = yield* template({ name: 'world' })
+        expect(result).toMatchInlineSnapshot(`
+          "<html>
+            <body>
+              <h1>Hello, WORLD</h1>
+            </body>
+          </html>"
+        `)
+      })
+    }),
+  )
+
+  it.effect('supports if', () =>
+    Effect.gen(function* () {
+      const template = T.dedent('if')`<html>
+        <body>
+          <h1>Hello, ${T.if(T.param('name'), {
+            if: ({ value }) => value === 'world',
+            // biome-ignore lint/suspicious/noThenProperty: <explanation>
+            then: ({ value }) => value.toUpperCase(),
+            else: () => 'world',
+          })}</h1>
+        </body>
+      </html>`
+
+      const result = yield* template({ name: 'world' })
+      expect(result).toMatchInlineSnapshot(`
+        "<html>
+          <body>
+            <h1>Hello, WORLD</h1>
           </body>
         </html>"
       `)

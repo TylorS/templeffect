@@ -62,8 +62,9 @@ export declare namespace Template {
 
   export type AnyParamType =
     | Primitive
-    | Parameter<any, any, any, any, boolean>
-    | ForEach<Parameter<any, any, any, any, boolean>, any, any>
+    | Parameter.Any
+    | ForEach<Parameter.Any, any, any>
+    | With<Parameter.Any, any, any>
     | Effect.Effect<Primitive, any, any>
     | Template<any, readonly any[]>
     | Unsafe
@@ -84,7 +85,11 @@ export declare namespace Template {
     ? Effect.Effect.Error<T>
     : T extends Template<infer _, infer Values>
       ? ErrorFromValue<Values[number]>
-      : never
+      : [T] extends [ForEach<infer _, infer E, infer __>]
+        ? E
+        : [T] extends [With<infer _, infer E, infer __>]
+          ? E
+          : never
 
   type ErrorFromParams<T> = {
     [K in keyof T]: T[K] extends Effect.Effect<any, any, any> ? Effect.Effect.Error<T[K]> : never
@@ -100,7 +105,11 @@ export declare namespace Template {
     ? R
     : T extends Template<any, infer Values>
       ? ContextFromValue<Values[number]>
-      : never
+      : [T] extends [ForEach<infer _, infer __, infer R>]
+        ? R
+        : [T] extends [With<infer _, infer __, infer R>]
+          ? R
+          : never
 
   type ContextFromParams<T> = {
     [K in keyof T]: T[K] extends Effect.Effect<any, any, infer R>
@@ -134,7 +143,7 @@ export declare namespace Template {
         }
     : [Value] extends [Template<infer Name, infer Values extends ReadonlyArray<any>>]
       ? { readonly [K in Name]: DeriveParameters<Values, IncludeEffects, {}> }
-      : [Value] extends [ForEach<infer Parameter extends Parameter.Any, infer E, infer A>]
+      : [Value] extends [ForEach<infer Parameter extends Parameter.Any, infer E, infer R>]
         ? {
             readonly [K in Parameter.Name<Parameter>]:
               | ReadonlyArray<Parameter.Type<Parameter>>
@@ -142,7 +151,15 @@ export declare namespace Template {
                   ? Effect.Effect<ReadonlyArray<Parameter.Type<Parameter>>, any, any>
                   : never)
           }
-        : {}
+        : [Value] extends [With<infer Parameter extends Parameter.Any, infer E, infer R>]
+          ? {
+              readonly [K in Parameter.Name<Parameter>]:
+                | Parameter.Type<Parameter>
+                | (IncludeEffects extends true
+                    ? Effect.Effect<Parameter.Type<Parameter>, any, any>
+                    : never)
+            }
+          : {}
 }
 
 /**
@@ -733,17 +750,55 @@ function compileParameters<
       const parameter = value.parameter
       const typeSchema = Schema.Array(Schema.typeSchema(parameter.schema))
       fields[parameter.name] = typeSchema as any
-      dynamicParts.set(i, [parameter.name, encode_(Schema.String.pipe(
-        Schema.transformOrFail(typeSchema, {
-          decode: () =>
-            Effect.dieMessage('Not implemented intentionally, only encode is utilized.'),
-          encode: (input) =>
-            Effect.forEach(input, (item) => encode_(parameter.schema)(item), {
-              concurrency: 'unbounded',
-            }).pipe(Effect.map((items) => items.join(value.delimiter))),
-          strict: true,
-        }),
-      ))])
+      dynamicParts.set(i, [
+        parameter.name,
+        encode_(
+          Schema.String.pipe(
+            Schema.transformOrFail(typeSchema, {
+              decode: () =>
+                Effect.dieMessage('Not implemented intentionally, only encode is utilized.'),
+              encode: (input) =>
+                Effect.forEach(
+                  input,
+                  (item, i) =>
+                    pipe(
+                      item,
+                      encode_(parameter.schema),
+                      Effect.flatMap((input) => {
+                        const y = value.fn({ value: item, input }, i)
+                        if (Effect.isEffect(y)) {
+                          return y
+                        }
+                        return Effect.succeed(y)
+                      }),
+                    ),
+                  UNBOUNDED_CONCURRENCY,
+                ).pipe(Effect.map((items) => items.join(value.delimiter))),
+              strict: true,
+            }),
+          ),
+        ),
+      ])
+      parts[i] = 'dynamic'
+    } else if (value._tag === 'With') {
+      const fn = value.fn
+      const schema = value.parameter.schema
+      fields[value.parameter.name] = Schema.typeSchema(schema)
+      dynamicParts.set(i, [
+        value.parameter.name,
+        (value) =>
+          pipe(
+            value,
+            encode_(schema),
+            Effect.flatMap((input) => {
+              const y = fn({ value, input })
+              if (Effect.isEffect(y)) {
+                return y
+              }
+              return Effect.succeed(y)
+            }),
+          ),
+      ])
       parts[i] = 'dynamic'
     } else {
       throw new Error(`Invalid template value: ${JSON.stringify(value)}`)
@@ -820,12 +875,15 @@ function isPrimitive(value: Template.AnyParamType): value is Template.Primitive 
   return PRIMITIVE_TYPEOF_VALUES.includes(typeof value) || value === null
 }
 
-export class ForEach<P extends Parameter<any, any, any, any, any>, E, R> {
+export class ForEach<P extends Parameter.Any, E, R> {
   readonly _tag = 'ForEach' as const
 
   constructor(
     readonly parameter: P,
-    readonly fn: (value: Parameter.Type<P>, index: number) => Effect.Effect<string, E, R>,
+    readonly fn: (
+      params: { value: Parameter.Type<P>; input: Parameter.Input<P> },
+      index: number,
+    ) => string | Effect.Effect<string, E, R>,
     readonly delimiter: string,
   ) {}
 
@@ -834,10 +892,95 @@ export class ForEach<P extends Parameter<any, any, any, any, any>, E, R> {
   }
 }
 
-export function forEach<P extends Parameter<any, any, any, any, any>, E, R>(
+export function forEach<P extends Parameter.Any, E = never, R = never>(
   parameter: P,
-  fn: (value: Parameter.Type<P>, index: number) => Effect.Effect<string, E, R>,
+  fn: (
+    params: { value: Parameter.Type<P>; input: Parameter.Input<P> },
+    index: number,
+  ) => string | Effect.Effect<string, E, R>,
   separator = '',
 ): ForEach<P, E, R> {
   return new ForEach(parameter, fn, separator)
+}
+
+export class With<P extends Parameter.Any, E, R> {
+  readonly _tag = 'With' as const
+
+  constructor(
+    readonly parameter: P,
+    readonly fn: ({
+      value,
+      input,
+    }: { value: Parameter.Type<P>; input: Parameter.Input<P> }) =>
+      | string
+      | Effect.Effect<string, E, R>,
+  ) {}
+}
+
+function with_<P extends Parameter.Any, E = never, R = never>(
+  parameter: P,
+  fn: (params: { value: Parameter.Type<P>; input: Parameter.Input<P> }) =>
+    | string
+    | Effect.Effect<string, E, R>,
+): With<P, E, R> {
+  return new With(parameter, fn)
+}
+
+export { with_ as with }
+
+export class Case<P extends Parameter.Any, E = never, R = never, E2 = never, R2 = never> {
+  constructor(
+    readonly parameter: P,
+    readonly predicate: (params: { value: Parameter.Type<P>; input: Parameter.Input<P> }) =>
+      | boolean
+      | Effect.Effect<boolean, E, R>,
+    readonly then: (params: { value: Parameter.Type<P>; input: Parameter.Input<P> }) =>
+      | string
+      | Effect.Effect<string, E2, R2>,
+  ) {}
+}
+
+export namespace Case {
+  export type Any = Case<Parameter.Any, any, any, any, any>
+}
+
+function if_<
+  P extends Parameter.Any,
+  E = never,
+  R = never,
+  E2 = never,
+  R2 = never,
+  E3 = never,
+  R3 = never,
+>(
+  parameter: P,
+  ifParams: {
+    if: (params: { value: Parameter.Type<P>; input: Parameter.Input<P> }) =>
+      | boolean
+      | Effect.Effect<boolean, E, R>
+    then: (params: { value: Parameter.Type<P>; input: Parameter.Input<P> }) =>
+      | string
+      | Effect.Effect<string, E2, R2>
+    else: (params: { value: Parameter.Type<P>; input: Parameter.Input<P> }) =>
+      | string
+      | Effect.Effect<string, E3, R3>
+  },
+) {
+  return with_(parameter, (params) =>
+    Effect.if(ifParams.if(params), {
+      onTrue: () => liftEffect_(ifParams.then(params)),
+      onFalse: () => liftEffect_(ifParams.else(params)),
+    }),
+  )
+}
+
+export { if_ as if }
+
+function liftEffect_<A, E = never, R = never>(
+  valueOrEffect: A | Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  if (Effect.isEffect(valueOrEffect)) {
+    return valueOrEffect
+  }
+  return Effect.succeed(valueOrEffect)
 }
