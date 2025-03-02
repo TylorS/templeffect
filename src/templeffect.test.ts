@@ -251,4 +251,23 @@ describe('templeffect', () => {
       `)
     }),
   )
+
+  it.effect('supports forEach', () =>
+    Effect.gen(function* () {
+      const template = T.dedent('forEach')`<html>
+        <body>
+          <h1>Hello, ${T.forEach(T.param('names'), (name) => Effect.succeed(name), ', ')}</h1>
+        </body>
+      </html>`
+
+      const result = yield* template({ names: ['John', 'Jane'] })
+      expect(result).toMatchInlineSnapshot(`
+        "<html>
+          <body>
+            <h1>Hello, John, Jane</h1>
+          </body>
+        </html>"
+      `)
+    }),
+  )
 })

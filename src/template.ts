@@ -63,6 +63,7 @@ export declare namespace Template {
   export type AnyParamType =
     | Primitive
     | Parameter<any, any, any, any, boolean>
+    | ForEach<Parameter<any, any, any, any, boolean>, any, any>
     | Effect.Effect<Primitive, any, any>
     | Template<any, readonly any[]>
     | Unsafe
@@ -133,7 +134,15 @@ export declare namespace Template {
         }
     : [Value] extends [Template<infer Name, infer Values extends ReadonlyArray<any>>]
       ? { readonly [K in Name]: DeriveParameters<Values, IncludeEffects, {}> }
-      : {}
+      : [Value] extends [ForEach<infer Parameter extends Parameter.Any, infer E, infer A>]
+        ? {
+            readonly [K in Parameter.Name<Parameter>]:
+              | ReadonlyArray<Parameter.Type<Parameter>>
+              | (IncludeEffects extends true
+                  ? Effect.Effect<ReadonlyArray<Parameter.Type<Parameter>>, any, any>
+                  : never)
+          }
+        : {}
 }
 
 /**
@@ -244,6 +253,34 @@ export class Parameter<
     : Parameter<Name, A | null | undefined, Unsafe | null | undefined, R, true> {
     return paramWithSchema(this.name, Schema.NullishOr(this.schema), true, fallback) as any
   }
+}
+
+export namespace Parameter {
+  export type Any = Parameter<any, any, any, any, any>
+
+  export type Name<T extends Any> = T extends Parameter<infer Name, any, any, any, any>
+    ? Name
+    : never
+  export type Type<T extends Any> = T extends Parameter<
+    any,
+    infer A,
+    infer I,
+    infer R,
+    infer Optional
+  >
+    ? [Optional] extends [false]
+      ? A
+      : A | undefined
+    : never
+  export type Input<T extends Any> = T extends Parameter<any, any, infer I, any, infer Optional>
+    ? [Optional] extends [false]
+      ? I
+      : I | undefined
+    : never
+  export type Output<T extends Any> = T extends Parameter<any, any, any, infer R, any> ? R : never
+  export type Optional<T extends Any> = T extends Parameter<any, any, any, any, infer Optional>
+    ? Optional
+    : never
 }
 
 export function paramWithSchema<
@@ -692,6 +729,22 @@ function compileParameters<
       fields[value.name] = Schema.typeSchema(valueSchema)
       dynamicParts.set(i, [value.name, encode_(valueSchema)])
       parts[i] = 'dynamic'
+    } else if (value._tag === 'ForEach') {
+      const parameter = value.parameter
+      const typeSchema = Schema.Array(Schema.typeSchema(parameter.schema))
+      fields[parameter.name] = typeSchema as any
+      dynamicParts.set(i, [parameter.name, encode_(Schema.String.pipe(
+        Schema.transformOrFail(typeSchema, {
+          decode: () =>
+            Effect.dieMessage('Not implemented intentionally, only encode is utilized.'),
+          encode: (input) =>
+            Effect.forEach(input, (item) => encode_(parameter.schema)(item), {
+              concurrency: 'unbounded',
+            }).pipe(Effect.map((items) => items.join(value.delimiter))),
+          strict: true,
+        }),
+      ))])
+      parts[i] = 'dynamic'
     } else {
       throw new Error(`Invalid template value: ${JSON.stringify(value)}`)
     }
@@ -765,4 +818,26 @@ const PRIMITIVE_TYPEOF_VALUES = ['string', 'number', 'boolean', 'bigint', 'undef
 
 function isPrimitive(value: Template.AnyParamType): value is Template.Primitive {
   return PRIMITIVE_TYPEOF_VALUES.includes(typeof value) || value === null
+}
+
+export class ForEach<P extends Parameter<any, any, any, any, any>, E, R> {
+  readonly _tag = 'ForEach' as const
+
+  constructor(
+    readonly parameter: P,
+    readonly fn: (value: Parameter.Type<P>, index: number) => Effect.Effect<string, E, R>,
+    readonly delimiter: string,
+  ) {}
+
+  separator(delimiter: string): ForEach<P, E, R> {
+    return new ForEach(this.parameter, this.fn, delimiter)
+  }
+}
+
+export function forEach<P extends Parameter<any, any, any, any, any>, E, R>(
+  parameter: P,
+  fn: (value: Parameter.Type<P>, index: number) => Effect.Effect<string, E, R>,
+  separator = '',
+): ForEach<P, E, R> {
+  return new ForEach(parameter, fn, separator)
 }
